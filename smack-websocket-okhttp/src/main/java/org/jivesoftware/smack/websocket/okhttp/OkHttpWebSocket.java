@@ -16,14 +16,19 @@
  */
 package org.jivesoftware.smack.websocket.okhttp;
 
+import java.net.InetSocketAddress;
+import java.net.Proxy;
 import java.util.logging.Level;
 
 import javax.net.ssl.SSLSession;
 
 import org.jivesoftware.smack.c2s.internal.ModularXmppClientToServerConnectionInternal;
+import org.jivesoftware.smack.proxy.ProxyInfo;
 import org.jivesoftware.smack.websocket.impl.AbstractWebSocket;
 import org.jivesoftware.smack.websocket.rce.WebSocketRemoteConnectionEndpoint;
 
+import okhttp3.Authenticator;
+import okhttp3.Credentials;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.Response;
@@ -53,6 +58,8 @@ public final class OkHttpWebSocket extends AbstractWebSocket {
             if (customHostnameVerifier != null) {
                 okHttpClientBuilder.hostnameVerifier(customHostnameVerifier);
             }
+
+            applyProxySettings(okHttpClientBuilder, connectionInternal.connection.getConfiguration().getProxyInfo());
         }
         var okHttpClient = okHttpClientBuilder.build();
 
@@ -63,6 +70,41 @@ public final class OkHttpWebSocket extends AbstractWebSocket {
                               .build();
 
         okHttpWebSocket = okHttpClient.newWebSocket(request, listener);
+    }
+
+    private void applyProxySettings(OkHttpClient.Builder okHttpClientBuilder, ProxyInfo proxyInfo) {
+        if (proxyInfo == null
+                || proxyInfo.getProxyType() != ProxyInfo.ProxyType.HTTP
+                || proxyInfo.getProxyAddress() == null
+                || proxyInfo.getProxyPort() == 0) {
+            return;
+        }
+
+        var proxy = new Proxy(Proxy.Type.HTTP,
+                new InetSocketAddress(proxyInfo.getProxyAddress(), proxyInfo.getProxyPort()));
+        okHttpClientBuilder.proxy(proxy);
+
+        if (proxyInfo.getProxyUsername() != null) {
+            Authenticator proxyAuthenticator = (route, response) ->
+            {
+                // If the proxy header is already set, the credentials are probably wrong.
+                // So do nothing!
+                if (response.request().header("Proxy-Authorization") != null) {
+                    return null;
+                }
+
+                // Generate Basic Auth credentials
+                String credentials = Credentials.basic(proxyInfo.getProxyUsername(),
+                        proxyInfo.getProxyPassword());
+
+                // Add the 'Proxy-Authorization' header to the request
+                return response.request()
+                        .newBuilder()
+                        .header("Proxy-Authorization", credentials)
+                        .build();
+            };
+            okHttpClientBuilder.proxyAuthenticator(proxyAuthenticator);
+        }
     }
 
     private final WebSocketListener listener = new WebSocketListener() {
